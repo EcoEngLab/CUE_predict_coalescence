@@ -16,7 +16,7 @@ code_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(code_path)
 
 # Random seed settings
-BASE_SEED = 12345
+BASE_SEED = 37
 N_SIMULATIONS = 50
 
 # Species pool and resource pool parameters

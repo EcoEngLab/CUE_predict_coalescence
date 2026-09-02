@@ -76,7 +76,7 @@ def first_unique(series):
     vals = pd.Series(series).dropna().unique()
     return vals[0] if len(vals) > 0 else np.nan
 
-df = pd.read_csv("coal_small.csv")
+df = pd.read_csv("coal.csv")
 df = df.rename(columns={"Species_Competition_Dot": "Species_Competition2"})
 df["Community"] = df["Community"].astype(str)
 df["Species_ID"] = pd.to_numeric(df["Species_ID"], errors="coerce")
@@ -85,15 +85,6 @@ df["Abundance"] = pd.to_numeric(df["Abundance"], errors="coerce")
 
 df_surv = df[df["Abundance"] > SURVIVAL_THRESHOLD].copy()
 df_surv["log10_Abundance"] = np.log10(df_surv["Abundance"])
-
-# Calculate Community_CUE_surv (community-level CUE for surviving species only)
-community_cue_surv = (
-    df_surv
-    .groupby(["Seed", "Community"])
-    .apply(lambda g: np.average(g["Species_CUE"], weights=g["Abundance"]), include_groups=False)
-    .reset_index(name="Community_CUE_surv")
-)
-df_surv = df_surv.merge(community_cue_surv, on=["Seed", "Community"], how="left")
 
 params_df = pd.read_csv("cue_abundance_theory_params.csv")
 params_df["Community"] = params_df["Community"].astype(str)
@@ -290,7 +281,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
 
     ax.set_xlabel("Species uptake similarity")
     ax.set_title(community_labels[comm], pad=8)
-    ax.set_ylim(0.51, 0.59)
+    ax.set_ylim(0.50, 0.59)
 
     # x轴只保留4个主刻度
     ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
@@ -459,39 +450,7 @@ dom_colors = {
     "Community 2": pal_rgb["2"]
 }
 
-fig, ax = plt.subplots(figsize=(8, 5))
-
-for grp in ["Community 1", "Community 2"]:
-    dat = df_diff[df_diff["DomGroup"] == grp]
-
-    ax.scatter(
-        dat["CUE_Diff"],
-        dat["Sim_Diff"],
-        s=44,
-        alpha=0.65,
-        facecolors=dom_colors[grp],
-        edgecolors="black",
-        linewidths=0.5,
-        label=grp,
-        zorder=3
-    )
-
-ax.axhline(0, linestyle="--", color="black", linewidth=0.7)
-ax.set_xlim(-0.02, 0.02)
-ax.set_xlabel(r"Community CUE difference")
-ax.set_ylabel(r"Similarity difference")
-ax.legend(title="Dominant community", loc="lower center", bbox_to_anchor=(0.5, -0.28), ncol=3)
-style_ax(ax, grid=False)
-
-plt.tight_layout()
-plt.show()
-
-
-
-# ====================================================================================================
-# ==================== ΔCUE vs ΔSimilarity under Resource Overlap ===============================
-# ====================================================================================================
-
+# Prepare data for Resource Overlap panel
 df_diff_resource = df_resource.copy()
 df_diff_resource["CUE_diff"] = df_diff_resource["CUE1"] - df_diff_resource["CUE2"]
 df_diff_resource["Sim_diff"] = df_diff_resource["Sim_3vs1"] - df_diff_resource["Sim_3vs2"]
@@ -501,8 +460,7 @@ df_diff_resource = df_diff_resource[
     (df_diff_resource["CUE_diff"] <= 0.02)
 ]
 
-n_bins = 7
-#breaks = np.linspace(df_diff_resource["CUE_diff"].min(), df_diff_resource["CUE_diff"].max(), n_bins + 1)
+n_bins = 5
 breaks = np.linspace(-0.02, 0.02, n_bins + 1)
 
 df_diff_resource["CUE_bin"] = pd.cut(
@@ -528,8 +486,39 @@ overlap_colors = {
     "0.75": "#9FB7CC"
 }
 
-fig, ax = plt.subplots(figsize=(10.2, 5.2))
+# Create combined figure with two panels
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
+# ========== Left Panel: ΔCUE vs ΔSimilarity with Dominance ==========
+for grp in ["Community 1", "Community 2"]:
+    dat = df_diff[df_diff["DomGroup"] == grp]
+
+    ax1.scatter(
+        dat["CUE_Diff"],
+        dat["Sim_Diff"],
+        s=100,
+        alpha=0.65,
+        facecolors=dom_colors[grp],
+        edgecolors="black",
+        linewidths=0.5,
+        label=grp,
+        zorder=3
+    )
+
+ax1.axhline(0, linestyle="--", color="black", linewidth=0.7)
+ax1.set_xlim(-0.02, 0.02)
+ax1.set_xlabel(r"Community CUE difference")
+ax1.set_ylabel(r"Similarity difference")
+ax1.legend(
+    title="Dominant community",
+    loc="lower right",
+    frameon=True,
+    edgecolor="black",
+    framealpha=0.6
+)
+style_ax(ax1, grid=False)
+
+# ========== Right Panel: ΔCUE vs ΔSimilarity under Resource Overlap ==========
 sns.boxplot(
     data=df_diff_resource,
     x="CUE_bin",
@@ -541,7 +530,7 @@ sns.boxplot(
     fliersize=1.8,
     linewidth=0.7,
     saturation=1,
-    ax=ax,
+    ax=ax2,
     boxprops=dict(edgecolor="black"),
     medianprops=dict(color="black", linewidth=0.9),
     whiskerprops=dict(color="black", linewidth=0.7),
@@ -555,17 +544,28 @@ sns.boxplot(
     )
 )
 
-ax.axhline(0, linestyle="--", color="black", linewidth=0.7)
-ax.set_ylim(-0.5, 0.5)
-ax.set_xlabel(r"Community CUE difference")
-ax.set_ylabel(r"Similarity difference")
-ax.legend(title="Resource overlap", loc="lower center", bbox_to_anchor=(0.5, -0.3), ncol=3)
-ax.set_xticklabels(
+ax2.axhline(0, linestyle="--", color="black", linewidth=0.7)
+ax2.set_ylim(-0.4, 0.4)
+ax2.set_xlabel(r"Community CUE difference")
+ax2.set_ylabel(r"Similarity difference")
+lg = ax2.legend(
+    title="Resource overlap",
+    loc="upper left",
+    frameon=True,
+    edgecolor="black",
+    facecolor="white",
+    framealpha=0.6
+)
+lg.get_texts()[0].set_text("25%")
+lg.get_texts()[1].set_text("50%")
+lg.get_texts()[2].set_text("75%")
+
+ax2.set_xticklabels(
     [f"({iv.left:.2f}, {iv.right:.2f}]" for iv in interval_order],
     rotation=40,
     ha="right"
 )
-style_ax(ax, grid=False)
+style_ax(ax2, grid=False)
 
 plt.tight_layout()
 plt.show()
@@ -614,7 +614,13 @@ for comm in ["1", "2", "3"]:
 
 ax1.set_xlabel("Community-level CUE")
 ax1.set_ylabel("Total residual resource")
-ax1.legend(title="Community", loc="best")
+ax1.legend(
+    loc="upper right",
+    frameon=True,
+    edgecolor="black",
+    facecolor="white",
+    framealpha=0.6
+)
 style_ax(ax1, grid=False)
 
 sns.boxplot(
@@ -678,14 +684,36 @@ dilution_labels = {
     0.1: "Rarity level = 0.1"
 }
 
-fig, axes = plt.subplots(2, 1, figsize=(12, 8.2), sharex=False)
-
 color_map = {
     "Survived": "#A8C3A6",
     "Extinct": "#D8A39A"
 }
 
-for ax, dil in zip(axes, [0.01, 0.1]):
+y_low_max = 550
+y_high_min = 2200
+y_high_max = 2600
+
+fig = plt.figure(figsize=(12, 5.8))
+gs = fig.add_gridspec(
+    2, 2,
+    height_ratios=[1, 4],
+    wspace=0.08,
+    hspace=0.03
+)
+
+ax_top_left = fig.add_subplot(gs[0, 0])
+ax_top_right = fig.add_subplot(gs[0, 1], sharey=ax_top_left)
+
+ax_bot_left = fig.add_subplot(gs[1, 0], sharex=ax_top_left)
+ax_bot_right = fig.add_subplot(gs[1, 1], sharex=ax_top_right, sharey=ax_bot_left)
+
+top_axes = [ax_top_left, ax_top_right]
+bot_axes = [ax_bot_left, ax_bot_right]
+
+for i, dil in enumerate([0.01, 0.1]):
+    ax_top = top_axes[i]
+    ax_bot = bot_axes[i]
+
     dat = df_rare_bar[df_rare_bar["DilutionRate"] == dil].copy()
 
     pivot = (
@@ -722,7 +750,7 @@ for ax, dil in zip(axes, [0.01, 0.1]):
 
     x = np.arange(len(plot_extinct))
 
-    ax.bar(
+    ax_bot.bar(
         x, plot_extinct,
         color=color_map["Extinct"],
         edgecolor="black",
@@ -730,7 +758,7 @@ for ax, dil in zip(axes, [0.01, 0.1]):
         label="Extinct",
         width=0.85
     )
-    ax.bar(
+    ax_bot.bar(
         x, plot_survived,
         bottom=plot_extinct,
         color=color_map["Survived"],
@@ -740,19 +768,64 @@ for ax, dil in zip(axes, [0.01, 0.1]):
         width=0.85
     )
 
-    ax.set_title(dilution_labels[dil], pad=8)
-    ax.set_ylabel("Number of species")
-    ax.set_xlabel("Species-level CUE")
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        tick_labels,
-        rotation=40,
-        ha="right"
+    ax_top.bar(
+        x, plot_extinct,
+        color=color_map["Extinct"],
+        edgecolor="black",
+        linewidth=0.35,
+        width=0.85
     )
-    style_ax(ax, grid=False)
+    ax_top.bar(
+        x, plot_survived,
+        bottom=plot_extinct,
+        color=color_map["Survived"],
+        edgecolor="black",
+        linewidth=0.35,
+        width=0.85
+    )
 
-handles, labels = axes[0].get_legend_handles_labels()
-axes[0].legend(handles[::-1], labels[::-1], title="Outcome", loc="upper right")
+    ax_top.set_title(dilution_labels[dil], pad=8)
+
+    ax_bot.set_xlabel("Species-level CUE")
+    ax_bot.set_xticks(x)
+    ax_bot.set_xticklabels(tick_labels, rotation=40, ha="right")
+
+    ax_top.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+
+    ax_bot.set_ylim(0, y_low_max)
+    ax_top.set_ylim(y_high_min, y_high_max)
+
+    style_ax(ax_top, grid=False)
+    style_ax(ax_bot, grid=False)
+
+    ax_top.spines["bottom"].set_visible(False)
+    ax_bot.spines["top"].set_visible(False)
+
+    if i == 0:
+        ax_bot.set_ylabel("Number of species")
+    else:
+        ax_bot.set_ylabel("")
+        ax_bot.tick_params(axis="y", left=False, labelleft=False)
+        ax_top.tick_params(axis="y", left=False, labelleft=False)
+
+    handles, labels = ax_bot.get_legend_handles_labels()
+    leg = ax_bot.legend(
+        handles[::-1], labels[::-1],
+        loc="upper right",
+        frameon=True,
+        fancybox=False,
+        framealpha=0.6
+    )
+    leg.get_frame().set_edgecolor("black")
+    leg.get_frame().set_linewidth(0.8)
+
+d = 0.012
+kwargs_top = dict(transform=ax_top_left.transAxes, color="black", clip_on=False, linewidth=1.2)
+kwargs_bot = dict(transform=ax_bot_left.transAxes, color="black", clip_on=False, linewidth=1.2)
+
+ax_top_left.plot((-d, +d), (-d, +d), **kwargs_top)
+
+ax_bot_left.plot((-d, +d), (1 - d, 1 + d), **kwargs_bot)
 
 plt.tight_layout()
 plt.show()
