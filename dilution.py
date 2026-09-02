@@ -213,7 +213,7 @@ def choose_resources_for_second_community(M_pool, M1, M2, resource_indices1, rng
 # simulation parameters and main function
 # =========================
 BASE_SEED = 50
-N_SIMULATIONS = 10
+N_SIMULATIONS = 100
 
 # Save results in the same folder as this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
