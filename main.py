@@ -1,9 +1,19 @@
-from multiprocessing import Pool, cpu_count
+import os
+
+# Parallelize across seeds rather than also spawning BLAS threads in each worker.
+# Set defaults before importing NumPy/SciPy; explicit environment overrides remain valid.
+for _thread_variable in (
+    "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"
+):
+    os.environ.setdefault(_thread_variable, "1")
+
+from multiprocessing import Pool, TimeoutError as PoolTimeoutError, cpu_count
+from time import perf_counter
 import numpy as np
 import pandas as pd
-import os
 import sys
 from scipy.integrate import solve_ivp
+from scipy.optimize import minimize_scalar
 
 
 # Basic simulation of microbial community coalescence
@@ -18,6 +28,12 @@ sys.path.append(code_path)
 # Random seed settings
 BASE_SEED = 37
 N_SIMULATIONS = 50
+N_WORKERS = min(4, cpu_count())
+
+# Extra monoculture assays match rmax_cue.py: Community 1 species only.
+# Adds N1 small ODE solves per seed; disable to skip monoculture assays.
+COMPUTE_MEASURABLE_CUE = True
+EIGENVALUE_TOL = 1e-8
 
 # Species pool and resource pool parameters
 N_POOL = 1000
@@ -149,7 +165,7 @@ def compute_CUE(sol, N, u, R_ref, l, m):
 
 def solve_micrm(
     N, M, u, l, m, lambda_alpha, rho, omega, C0, R0,
-    t_span, t_eval=None, tol=1e-5, method='BDF'
+    t_span, t_eval=None, tol=1e-5, method='BDF', dense_output=False
 ):
     m_vec = ensure_m_vector(m, N)
     rho = np.asarray(rho, dtype=float)
@@ -188,13 +204,234 @@ def solve_micrm(
         t_span=t_span,
         y0=Y0,
         method=method,
-        events=equilibrium_event
+        events=equilibrium_event,
+        dense_output=dense_output
     )
     if t_eval is not None:
         solve_kwargs["t_eval"] = t_eval
 
     sol = solve_ivp(**solve_kwargs)
     return sol
+
+
+def micrm_jacobian(C, R, u, l, m, omega):
+    """Analytic Jacobian of the eta-based model, including extinct species.
+
+    l[i, b, a] routes resource b into resource a. At a zero population this
+    uses the ecological invasion derivative, rather than differentiating clip().
+    """
+    retained = u * compute_eta_from_l(l)
+    growth = retained @ R - ensure_m_vector(m, len(C))
+    Jcc = np.diag(growth)
+    Jcr = C[:, None] * retained
+    Jrc = (np.einsum('ib,iba->ia', u * R, l) - u * R).T
+    Jrr = np.einsum('i,ib,iba->ab', C, u, l) - np.diag(omega + C @ u)
+    return np.block([[Jcc, Jcr], [Jrc, Jrr]])
+
+
+def effective_lv_parameters(C, R, u, l, m, omega, jacobian=None):
+    """Linearize resource equilibrium: g(C) ~= r + alpha @ C."""
+    N = len(C)
+    J = micrm_jacobian(C, R, u, l, m, omega) if jacobian is None else jacobian
+    resource_response = np.linalg.solve(-J[N:, N:], J[N:, :N])
+    retained = u * compute_eta_from_l(l)
+    alpha = retained @ resource_response
+    r = retained @ R - ensure_m_vector(m, N) - alpha @ C
+    return alpha, r
+
+
+def feasibility_proxy(alpha, cond_max=1e10):
+    """SVD log-volume proxy per survivor dimension; NOT a probability.
+
+    Matches the donor's log10 scale, with adaptive positive diagonal ridge.
+    Negative values are valid. Report ridge size and conditioning explicitly.
+    """
+    result = {"feasibility": np.nan, "Feasibility_Ridge": np.nan,
+              "Feasibility_Condition": np.nan, "Feasibility_Status": "no_survivors"}
+    if alpha.shape[0] == 0:
+        return result
+    if not np.all(np.isfinite(alpha)) or not np.any(alpha):
+        result["Feasibility_Status"] = "invalid_matrix"
+        return result
+    diagonal = np.abs(np.diag(alpha))
+    positive = diagonal[diagonal > 0]
+    scale = max(float(np.median(positive if positive.size else np.abs(alpha[alpha != 0]))), 1e-12)
+    identity = np.eye(len(alpha))
+
+    def candidate(relative):
+        A = alpha + relative * scale * identity
+        singular = np.linalg.svd(A, compute_uv=False)
+        condition = singular[0] / singular[-1] if singular[-1] > 0 else np.inf
+        return singular, condition
+
+    try:
+        relative, low = 1e-10, 1e-11
+        singular, condition = candidate(relative)
+        while (not np.isfinite(condition) or condition > cond_max) and relative < 1e-2:
+            low, relative = relative, min(relative * 10, 1e-2)
+            singular, condition = candidate(relative)
+        if not np.isfinite(condition) or condition > cond_max:
+            result["Feasibility_Status"] = "ill_conditioned"
+            return result
+        for _ in range(20):
+            middle = np.sqrt(low * relative)
+            trial_singular, trial_condition = candidate(middle)
+            if np.isfinite(trial_condition) and trial_condition <= cond_max:
+                relative, singular, condition = middle, trial_singular, trial_condition
+            else:
+                low = middle
+        result.update(feasibility=float(-np.mean(np.log10(singular))),
+                      Feasibility_Ridge=float(relative * scale),
+                      Feasibility_Condition=float(condition), Feasibility_Status="ok")
+    except np.linalg.LinAlgError:
+        result["Feasibility_Status"] = "svd_failed"
+    return result
+
+
+def micrm_depletion_competition_matrix(C_hat, R_hat, u, l_tensor, omega):
+    """Direct resource-depletion coefficients from equations (7)-(8).
+
+    q[i,a] = u[i,a] * (1 - sum_b l[i,a,b])
+    A_dep[i,j] = sum_a q[i,a] * u[j,a] * R*[a]
+                         / (omega[a] + sum_s u[s,a] * C*[s])
+
+    All populations contribute to the resource-loss denominator. This is the
+    diagonal resource-response expression in the supplied equations; leakage
+    enters q, without an additional inverse leakage-feedback matrix.
+    """
+    abundance = np.asarray(C_hat, dtype=float)
+    resources = np.asarray(R_hat, dtype=float)
+    uptake = np.asarray(u, dtype=float)
+    leakage = np.asarray(l_tensor, dtype=float)
+    n_species, n_resources = uptake.shape
+    if abundance.shape != (n_species,) or resources.shape != (n_resources,):
+        raise ValueError("C_hat and R_hat must match the dimensions of u")
+    if leakage.shape != (n_species, n_resources, n_resources):
+        raise ValueError("l_tensor must have shape (species, resources, resources)")
+    turnover = np.broadcast_to(np.asarray(omega, dtype=float), (n_resources,))
+    resource_loss = turnover + abundance @ uptake
+    if not np.all(np.isfinite(resource_loss)) or np.any(resource_loss <= 0):
+        raise ValueError("Resource-loss denominators must be finite and positive")
+    retained_uptake = uptake * compute_eta_from_l(leakage)
+    matrix = (retained_uptake * (resources / resource_loss)[None, :]) @ uptake.T
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Depletion competition matrix must be finite")
+    return matrix
+
+
+def community_heterospecific_competition_pressure(matrix, C_final, survivor_idx=None):
+    """Equation (9): abundance-weighted pressure from other surviving species.
+
+    Restrict both focal species i and competitors j to survivors, exclude i=j,
+    and divide by total survivor abundance. One survivor gives zero; none NaN.
+    """
+    matrix = np.asarray(matrix, dtype=float)
+    abundance = np.asarray(C_final, dtype=float)
+    if matrix.shape != (abundance.size, abundance.size):
+        raise ValueError("Competition matrix must be square and match C_final")
+    if survivor_idx is None:
+        idx = np.flatnonzero(abundance > SURVIVAL_THRESHOLD)
+    else:
+        idx = np.asarray(survivor_idx)
+        if idx.dtype == bool:
+            if idx.shape != abundance.shape:
+                raise ValueError("Survivor mask must match C_final")
+            idx = np.flatnonzero(idx)
+        else:
+            idx = idx.astype(int)
+    if idx.size == 0:
+        return np.nan
+    submatrix = matrix[np.ix_(idx, idx)].copy()
+    np.fill_diagonal(submatrix, 0.0)
+    survivor_abundance = abundance[idx]
+    total_abundance = np.sum(survivor_abundance)
+    if total_abundance <= 0:
+        return np.nan
+    pressure = submatrix @ survivor_abundance
+    return float(survivor_abundance @ pressure / total_abundance)
+
+
+def analyze_community(sol, u, l, m, rho, omega):
+    N = len(u)
+    C, R = np.maximum(sol.y[:N, -1], 0), np.maximum(sol.y[N:, -1], 0)
+    survivors = C > SURVIVAL_THRESHOLD
+    eta = compute_eta_from_l(l)
+    J = micrm_jacobian(C, R, u, l, m, omega)
+    growth = (u * eta) @ R - ensure_m_vector(m, N)
+    resource_derivative = rho - omega * R + J[N:, :N] @ C
+    residual = float(np.max(np.abs(np.concatenate([C * growth, resource_derivative]))))
+    at_equilibrium = bool(sol.success and residual <= 1.01e-5)
+    leading = float(np.max(np.linalg.eigvals(J).real)) if sol.success else np.nan
+    if not sol.success:
+        status = "solver_failed"
+    elif not at_equilibrium:
+        status = "not_equilibrated"
+    elif leading < -EIGENVALUE_TOL:
+        status = "stable"
+    elif leading > EIGENVALUE_TOL:
+        status = "unstable"
+    else:
+        status = "marginal"
+    try:
+        alpha, intrinsic_growth = effective_lv_parameters(C, R, u, l, m, omega, J)
+        feasibility = feasibility_proxy(alpha[np.ix_(survivors, survivors)])
+    except np.linalg.LinAlgError:
+        intrinsic_growth = np.full(N, np.nan)
+        feasibility = {"feasibility": np.nan, "Feasibility_Ridge": np.nan,
+                       "Feasibility_Condition": np.nan, "Feasibility_Status": "resource_matrix_singular"}
+    # Evaluate the resource-mediated competition only at a numerical equilibrium.
+    depletion_pressure = np.nan
+    if not sol.success:
+        depletion_status = "solver_failed"
+    elif not at_equilibrium:
+        depletion_status = "not_equilibrated"
+    elif not np.any(survivors):
+        depletion_status = "no_survivors"
+    else:
+        try:
+            depletion_matrix = micrm_depletion_competition_matrix(C, R, u, l, omega)
+            depletion_pressure = community_heterospecific_competition_pressure(
+                depletion_matrix, C, survivor_idx=survivors)
+            depletion_status = "ok"
+        except ValueError:
+            depletion_status = "invalid_resource_response"
+
+    metrics = dict(Heterospecific_Competition_Pressure=depletion_pressure,
+                   Depletion_Competition_Status=depletion_status,
+                   Leading_Eigenvalue=leading, N_Survivors=int(np.sum(survivors)),
+                   Equilibrium_Residual=residual, Equilibrium_Reached=at_equilibrium,
+                   Integration_Success=bool(sol.success), End_Time=float(sol.t[-1]),
+                   Stability_Status=status, **feasibility)
+    return intrinsic_growth, metrics
+
+
+def measurable_cue_monoculture(u_i, l_i, m, rho, omega, C0, R0, t_span):
+    """Donor rmax/(rmax+m) proxy from one species grown alone.
+
+    rmax is the largest per-capita net growth rate, not max(dC/dt).
+    This proxy is distinct from net production / gross resource uptake.
+    """
+    M = u_i.shape[1]
+    sol = solve_micrm(1, M, u_i, l_i, m, np.full(M, LEAKAGE_RATE),
+                      rho, omega, np.array([C0]), R0, t_span, dense_output=True)
+    result = dict(rmax=np.nan, t_star=np.nan, growth_CUE=np.nan,
+                  Monoculture_End_Time=float(sol.t[-1]), Monoculture_Success=bool(sol.success))
+    if not sol.success or len(sol.t) < 2:
+        return result
+    retained = (u_i * compute_eta_from_l(l_i))[0]
+    mu = retained @ np.maximum(sol.y[1:], 0) - m
+    peak = int(np.argmax(mu))
+    time_star, rmax = float(sol.t[peak]), float(mu[peak])
+    # Refine the sampled peak using the solver interpolant, including endpoints.
+    left, right = sol.t[max(0, peak - 1)], sol.t[min(len(sol.t) - 1, peak + 1)]
+    if right > left:
+        fit = minimize_scalar(lambda t: -(retained @ np.maximum(sol.sol(t)[1:], 0) - m),
+                              bounds=(left, right), method="bounded")
+        if fit.success and -fit.fun > rmax:
+            time_star, rmax = float(fit.x), float(-fit.fun)
+    result.update(rmax=rmax, t_star=time_star,
+                  growth_CUE=rmax / (rmax + m) if rmax > 0 and rmax + m > 0 else np.nan)
+    return result
 
 
 def calculate_effective_leakage(u, l):
@@ -702,18 +939,75 @@ def simulate(seed):
             "Theory_NearThresholdUsed_seed": params3["NearThresholdUsed"]
         })
 
+    # Add analyses without changing existing abundance-weighted CUE columns.
+    analyses = {}
+    for community, sol, u, l, rho, omega in (
+        (1, sol1, u1, l1, rho1, omega1),
+        (2, sol2, u2, l2, rho2, omega2),
+        (3, sol3, u3, l3, rho3, omega3),
+    ):
+        analyses[community] = analyze_community(sol, u, l, MAINTENANCE_COST, rho, omega)
+    for row in species_data:
+        intrinsic_growth, metrics = analyses[row["Community"]]
+        index = row["Species_ID"] - 1
+        row.update(metrics)
+        row["Growth_Rate"] = intrinsic_growth[index]
+        row.update(rmax=np.nan, t_star=np.nan, growth_CUE=np.nan,
+                   Monoculture_End_Time=np.nan, Monoculture_Success=False)
+        if COMPUTE_MEASURABLE_CUE and row["Community"] == 1:
+            row.update(measurable_cue_monoculture(
+                u1[index:index + 1], l1[index:index + 1], MAINTENANCE_COST,
+                rho1, omega1, C0_1[index], R0_1, T_SPAN))
+
     return species_data
 
 
 # =========================
 # 5. Main program
 # =========================
+def simulate_indexed(task):
+    index, seed = task
+    return index, simulate(seed)
+
+
 def main():
     seed_generator = np.random.default_rng(BASE_SEED)
     seeds = seed_generator.integers(0, 2**32 - 1, size=N_SIMULATIONS, dtype=np.uint32).tolist()
+    if not seeds:
+        raise ValueError("N_SIMULATIONS must be at least 1")
 
-    with Pool(cpu_count()) as pool:
-        all_species_data_nested = pool.map(simulate, seeds)
+    workers = max(1, min(N_WORKERS, cpu_count(), len(seeds)))
+    started = perf_counter()
+    completed = 0
+    all_species_data_nested = [None] * len(seeds)
+    print(
+        f"Starting {len(seeds)} simulations with {workers} worker(s); "
+        f"OPENBLAS_NUM_THREADS={os.environ['OPENBLAS_NUM_THREADS']}.",
+        flush=True
+    )
+    print(f"Monoculture CUE assays: {'enabled (Community 1)' if COMPUTE_MEASURABLE_CUE else 'disabled'}.", flush=True)
+    print("Progress is reported after each seed and every 30 seconds while waiting.", flush=True)
+
+    with Pool(workers) as pool:
+        results = pool.imap_unordered(simulate_indexed, enumerate(seeds), chunksize=1)
+        while completed < len(seeds):
+            try:
+                index, species_data = results.next(timeout=30)
+            except PoolTimeoutError:
+                print(
+                    f"Still computing: {completed}/{len(seeds)} seeds complete; "
+                    f"elapsed {(perf_counter() - started) / 60:.1f} min.",
+                    flush=True
+                )
+                continue
+            # Keep CSV row order identical to the original seed order.
+            all_species_data_nested[index] = species_data
+            completed += 1
+            print(
+                f"Completed {completed}/{len(seeds)} seeds "
+                f"(seed={seeds[index]}); elapsed {(perf_counter() - started) / 60:.1f} min.",
+                flush=True
+            )
 
     all_species_data = [
         row
@@ -725,6 +1019,23 @@ def main():
     df = pd.DataFrame(all_species_data)
     df.to_csv(os.path.join(code_path, "coal.csv"), index=False)
 
+    community_columns = [
+        "Seed", "Community", "Community_CUE", "Community_CUE_surv",
+        "Heterospecific_Competition_Pressure", "Depletion_Competition_Status",
+        "feasibility", "Feasibility_Status", "Feasibility_Ridge",
+        "Feasibility_Condition", "Leading_Eigenvalue", "Stability_Status", "N_Survivors",
+        "Equilibrium_Residual", "Equilibrium_Reached", "Integration_Success", "End_Time",
+    ]
+    community_metrics = df[community_columns].drop_duplicates(["Seed", "Community"])
+    community_metrics.to_csv(os.path.join(code_path, "coal_community_metrics.csv"), index=False)
+    # Always write the file so disabling assays cannot leave stale measurements.
+    rmax_data = df.loc[df["Community"] == 1, [
+        "Seed", "Community", "Species_ID", "Species_CUE", "Abundance", "rmax", "t_star",
+        "growth_CUE", "Monoculture_End_Time", "Monoculture_Success",
+    ]].rename(columns={"Species_CUE": "intrinsic_CUE"})
+    rmax_data.to_csv(os.path.join(code_path, "rmax_cue.csv"), index=False)
+
+
     summary_df = (
         df.groupby("Community")
         .agg(
@@ -733,6 +1044,7 @@ def main():
             Mean_Abundance=("Abundance", "mean"),
             Mean_Theory_Abundance=("Theory_Abundance", "mean"),
             Mean_Competition=("Competition", "mean"),
+            Mean_Heterospecific_Competition_Pressure=("Heterospecific_Competition_Pressure", "mean"),
             Mean_Facilitation=("Facilitation", "mean"),
             Mean_Depletion=("Depletion", "mean"),
             Mean_UptakeVar=("UptakeVar", "mean")
@@ -783,6 +1095,11 @@ def main():
     print(os.path.join(code_path, "coal.csv"))
     print(os.path.join(code_path, "coal_summary.csv"))
     print(os.path.join(code_path, "cue_abundance_theory_params.csv"))
+
+    print(os.path.join(code_path, "coal_community_metrics.csv"))
+    print(os.path.join(code_path, "rmax_cue.csv"))
+    print("\nStability status counts:")
+    print(community_metrics.groupby(["Community", "Stability_Status"]).size())
 
     print("\nSummary results by community:")
     print(summary_df)

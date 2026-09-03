@@ -3,6 +3,10 @@
 # ====================================================================================================
 
 import warnings
+import sys
+from pathlib import Path
+
+CODE_PATH = Path(__file__).resolve().parent
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -76,7 +80,98 @@ def first_unique(series):
     vals = pd.Series(series).dropna().unique()
     return vals[0] if len(vals) > 0 else np.nan
 
-df = pd.read_csv("coal.csv")
+def save_analysis_figure(fig, name):
+    output = CODE_PATH / "figures" / "cue_stability"
+    output.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    for extension in ("png", "pdf"):
+        fig.savefig(output / f"{name}.{extension}", dpi=220, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {output / name} (.png, .pdf)")
+
+
+def cue_comparison_axis(ax, data, x, y, xlabel, ylabel, title):
+    pairs = data.loc[np.isfinite(data[x]) & np.isfinite(data[y])]
+    for community in ("1", "2", "3"):
+        part = pairs[pairs["Community"] == community]
+        ax.scatter(part[x], part[y], s=24, alpha=0.7, color=pal_rgb[community],
+                   edgecolors="none", label=community_labels[community])
+    if len(pairs):
+        minimum = float(pairs[[x, y]].min().min())
+        maximum = float(pairs[[x, y]].max().max())
+        padding = max(0.02 * (maximum - minimum), 0.005)
+        limits = [minimum - padding, maximum + padding]
+        ax.plot(limits, limits, "--", color="#666666", linewidth=0.8, label="1:1")
+        ax.set_xlim(limits)
+        ax.set_ylim(limits)
+    else:
+        ax.text(0.5, 0.5, "No valid pairs", ha="center", va="center", transform=ax.transAxes)
+    ax.set(xlabel=xlabel, ylabel=ylabel, title=f"{title} (n={len(pairs)})")
+    ax.set_aspect("equal", adjustable="box")
+    style_ax(ax)
+
+
+def plot_cue_stability_analyses(data):
+    """Use one row per seed/community for community metrics; retain negative proxies."""
+    required = {"feasibility", "Leading_Eigenvalue", "Equilibrium_Reached",
+                "Feasibility_Status", "Integration_Success", "Stability_Status"}
+    missing = required.difference(data.columns)
+    if missing:
+        print("Skipping new analyses: coal.csv lacks " + ", ".join(sorted(missing)) +
+              ". Run the updated main.py first.")
+        return
+    valid = data[data["Integration_Success"].astype(str).str.lower().eq("true")].copy()
+    communities = valid.drop_duplicates(["Seed", "Community"])
+
+    if {"growth_CUE", "Monoculture_Success"}.issubset(valid.columns):
+        # Match the separate donor experiment: assay every Community 1 species,
+        # regardless of whether it later survives in the parent community.
+        measured = valid[(valid["Community"] == "1") &
+                         valid["Monoculture_Success"].astype(str).str.lower().eq("true")]
+        if np.isfinite(measured["growth_CUE"]).any():
+            fig, ax = plt.subplots(figsize=(7, 6))
+            cue_comparison_axis(ax, measured, "growth_CUE", "Species_CUE",
+                                "Measurable CUE proxy: rmax / (rmax + m)", "Theoretical CUE at R0",
+                                "Community 1 — monoculture assays")
+            save_analysis_figure(fig, "theoretical_vs_measurable_cue")
+        else:
+            print("No valid monoculture CUE values; measurable-CUE figure skipped.")
+
+    equilibrated = communities[communities["Equilibrium_Reached"].astype(str).str.lower().eq("true")]
+    print(f"Stability figures: {len(equilibrated)}/{len(communities)} community endpoints "
+          "meet the derivative tolerance. Status counts: " +
+          str(communities["Stability_Status"].value_counts().to_dict()))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    order = ["1", "2", "3"]
+    labels = ["Community 1", "Community 2", "Coalesced"]
+    for ax, column, ylabel, title in (
+        (axes[0], "feasibility", "Log10 feasibility proxy per dimension", "Survivor interaction matrix"),
+        (axes[1], "Leading_Eigenvalue", "Largest real part of eigenvalues", "Full consumer–resource Jacobian"),
+    ):
+        subset = equilibrated[np.isfinite(equilibrated[column])]
+        if column == "feasibility":
+            subset = subset[subset["Feasibility_Status"] == "ok"]
+        if len(subset):
+            sns.boxplot(data=subset, x="Community", y=column, order=order,
+                        hue="Community", hue_order=order, palette=pal_rgb, legend=False,
+                        ax=ax, width=0.5, fliersize=0, linewidth=0.8)
+            # Deterministic offsets avoid changing the simulation or global RNG state.
+            for index, community in enumerate(order):
+                values = subset.loc[subset["Community"] == community, column].to_numpy()
+                offsets = np.linspace(-0.08, 0.08, len(values)) if len(values) > 1 else np.zeros(len(values))
+                ax.scatter(index + offsets, values, color="#3F4A50", s=12, alpha=0.6, zorder=3)
+        else:
+            ax.text(0.5, 0.5, "No valid equilibrated communities", ha="center", transform=ax.transAxes)
+        ax.set_xticks(range(3), labels)
+        ax.set(xlabel="", ylabel=ylabel, title=title)
+        style_ax(ax)
+        if column == "Leading_Eigenvalue":
+            ax.axhline(0, color="#A84A42", linestyle="--", linewidth=0.8)
+    fig.suptitle("Feasibility proxy and local stability at numerical equilibria", fontsize=15)
+    save_analysis_figure(fig, "feasibility_and_leading_eigenvalue")
+
+
+df = pd.read_csv(CODE_PATH / "coal.csv")
 df = df.rename(columns={"Species_Competition_Dot": "Species_Competition2"})
 df["Community"] = df["Community"].astype(str)
 df["Species_ID"] = pd.to_numeric(df["Species_ID"], errors="coerce")
@@ -86,17 +181,23 @@ df["Abundance"] = pd.to_numeric(df["Abundance"], errors="coerce")
 df_surv = df[df["Abundance"] > SURVIVAL_THRESHOLD].copy()
 df_surv["log10_Abundance"] = np.log10(df_surv["Abundance"])
 
-params_df = pd.read_csv("cue_abundance_theory_params.csv")
+# New figures depend only on main.py's coal.csv. Use --analysis-only to skip
+# legacy figures that also require dilution/resource-overlap simulation outputs.
+plot_cue_stability_analyses(df)
+if "--analysis-only" in sys.argv:
+    raise SystemExit(0)
+
+params_df = pd.read_csv(CODE_PATH / "cue_abundance_theory_params.csv")
 params_df["Community"] = params_df["Community"].astype(str)
 
-df_resource = pd.read_csv("coal_resource.csv")
+df_resource = pd.read_csv(CODE_PATH / "coal_resource.csv")
 df_resource = df_resource.rename(columns={
     "Similarity_3vs1": "Sim_3vs1",
     "Similarity_3vs2": "Sim_3vs2"
 })
 df_resource["Overlap"] = df_resource["Overlap"].astype(str)
 
-df_rare = pd.read_csv("rare.csv")
+df_rare = pd.read_csv(CODE_PATH / "rare.csv")
 df_rare = df_rare.rename(columns={
     "Abundance": "C_final",
     "Species_CUE": "CUE"
@@ -661,8 +762,13 @@ plt.show()
 # ============================== Rare Species Invasion ==========================================
 # ====================================================================================================
 
-df_rare["survival"] = np.where(df_rare["C_final"] > SURVIVAL_THRESHOLD, "Survived", "Extinct")
-df_rare_filt = df_rare[df_rare["DilutionRate"].isin([0.01, 0.1])].copy()
+df_rare_filt = df_rare[
+    (df_rare["Community"] == 3) & (df_rare["Origin"] == "Comm2")
+].copy()
+df_rare_filt = df_rare_filt[df_rare_filt["DilutionRate"].isin([0.01, 0.1])].copy()
+df_rare_filt["survival"] = np.where(
+    df_rare_filt["C_final"] > SURVIVAL_THRESHOLD, "Survived", "Extinct"
+)
 
 n_bins = 20
 df_rare_filt["CUE_bin"] = pd.cut(df_rare_filt["CUE"], bins=n_bins)
