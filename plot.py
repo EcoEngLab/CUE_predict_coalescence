@@ -90,29 +90,61 @@ def save_analysis_figure(fig, name):
     print(f"Saved {output / name} (.png, .pdf)")
 
 
-def cue_comparison_axis(ax, data, x, y, xlabel, ylabel, title):
-    pairs = data.loc[np.isfinite(data[x]) & np.isfinite(data[y])]
-    for community in ("1", "2", "3"):
-        part = pairs[pairs["Community"] == community]
-        ax.scatter(part[x], part[y], s=24, alpha=0.7, color=pal_rgb[community],
-                   edgecolors="none", label=community_labels[community])
-    if len(pairs):
-        minimum = float(pairs[[x, y]].min().min())
-        maximum = float(pairs[[x, y]].max().max())
-        padding = max(0.02 * (maximum - minimum), 0.005)
-        limits = [minimum - padding, maximum + padding]
-        ax.plot(limits, limits, "--", color="#666666", linewidth=0.8, label="1:1")
-        ax.set_xlim(limits)
-        ax.set_ylim(limits)
-    else:
-        ax.text(0.5, 0.5, "No valid pairs", ha="center", va="center", transform=ax.transAxes)
-    ax.set(xlabel=xlabel, ylabel=ylabel, title=f"{title} (n={len(pairs)})")
-    ax.set_aspect("equal", adjustable="box")
-    style_ax(ax)
+def plot_rmax_cue(csv_path=None):
+    """Screenshot style: measurable growth CUE on x, theoretical CUE on y."""
+    csv_path = CODE_PATH / "rmax_cue.csv" if csv_path is None else Path(csv_path)
+    if not csv_path.exists():
+        print(f"Skipping rmax CUE figure: {csv_path} is missing. Run main.py first.")
+        return
+    measured = pd.read_csv(csv_path)
+    required = {"intrinsic_CUE", "growth_CUE"}
+    if not required.issubset(measured.columns):
+        raise ValueError("rmax_cue.csv requires intrinsic_CUE and growth_CUE columns")
+    valid = np.isfinite(measured["intrinsic_CUE"]) & np.isfinite(measured["growth_CUE"])
+    if "Monoculture_Success" in measured:
+        valid &= measured["Monoculture_Success"].astype(str).str.lower().eq("true")
+    measured = measured.loc[valid]
+    if measured.empty:
+        print("No valid monoculture CUE values; rmax CUE figure skipped.")
+        return
+
+    # Match the supplied screenshot: wide panel and outlined blue circles.
+    # Growth CUE = rmax/(rmax+m); intrinsic CUE = theoretical CUE at R0.
+    # Keep the screenshot's reference ranges while plotting current results.
+    x_limits = (0.823287127236146, 0.9183617527654756)
+    y_limits = (0.36267703816237207, 0.5994246408096401)
+    outside = (~measured["growth_CUE"].between(*x_limits) |
+               ~measured["intrinsic_CUE"].between(*y_limits)).sum()
+    if outside:
+        print(f"rmax CUE: {outside} points fall outside the fixed reference axes.")
+    from matplotlib.ticker import MultipleLocator
+    with plt.rc_context({"font.size": 10, "axes.labelsize": 10,
+                         "axes.titlesize": 10,
+                         "xtick.labelsize": 10, "ytick.labelsize": 10}):
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.scatter(measured["growth_CUE"], measured["intrinsic_CUE"],
+                   s=30, alpha=0.5, facecolors="#9FB7CC", edgecolors="black",
+                   linewidths=0.4, zorder=3)
+        ax.set_xlim(*x_limits)
+        ax.set_ylim(*y_limits)
+        ax.xaxis.set_major_locator(MultipleLocator(0.01))
+        ax.yaxis.set_major_locator(MultipleLocator(0.05))
+        ax.set_xlabel("Measurable CUE", labelpad=6)
+        ax.set_ylabel("Theoretical CUE", labelpad=8)
+        ax.set_title("", pad=10)
+        style_ax(ax)
+        fig.tight_layout()
+        output = CODE_PATH / "figures" / "monoculture_figures"
+        output.mkdir(parents=True, exist_ok=True)
+        for extension in ("png", "pdf"):
+            fig.savefig(output / f"rmax_cue.{extension}", dpi=220, bbox_inches="tight")
+        plt.close(fig)
+    print(f"Saved {output / 'rmax_cue'} (.png, .pdf); n={len(measured)} monocultures.")
 
 
 def plot_cue_stability_analyses(data):
     """Use one row per seed/community for community metrics; retain negative proxies."""
+    plot_rmax_cue()
     required = {"feasibility", "Leading_Eigenvalue", "Equilibrium_Reached",
                 "Feasibility_Status", "Integration_Success", "Stability_Status"}
     missing = required.difference(data.columns)
@@ -122,20 +154,6 @@ def plot_cue_stability_analyses(data):
         return
     valid = data[data["Integration_Success"].astype(str).str.lower().eq("true")].copy()
     communities = valid.drop_duplicates(["Seed", "Community"])
-
-    if {"growth_CUE", "Monoculture_Success"}.issubset(valid.columns):
-        # Match the separate donor experiment: assay every Community 1 species,
-        # regardless of whether it later survives in the parent community.
-        measured = valid[(valid["Community"] == "1") &
-                         valid["Monoculture_Success"].astype(str).str.lower().eq("true")]
-        if np.isfinite(measured["growth_CUE"]).any():
-            fig, ax = plt.subplots(figsize=(7, 6))
-            cue_comparison_axis(ax, measured, "growth_CUE", "Species_CUE",
-                                "Measurable CUE proxy: rmax / (rmax + m)", "Theoretical CUE at R0",
-                                "Community 1 — monoculture assays")
-            save_analysis_figure(fig, "theoretical_vs_measurable_cue")
-        else:
-            print("No valid monoculture CUE values; measurable-CUE figure skipped.")
 
     equilibrated = communities[communities["Equilibrium_Reached"].astype(str).str.lower().eq("true")]
     print(f"Stability figures: {len(equilibrated)}/{len(communities)} community endpoints "
@@ -172,7 +190,6 @@ def plot_cue_stability_analyses(data):
 
 
 df = pd.read_csv(CODE_PATH / "coal.csv")
-df = df.rename(columns={"Species_Competition_Dot": "Species_Competition2"})
 df["Community"] = df["Community"].astype(str)
 df["Species_ID"] = pd.to_numeric(df["Species_ID"], errors="coerce")
 df["Species_CUE"] = pd.to_numeric(df["Species_CUE"], errors="coerce")
@@ -181,7 +198,7 @@ df["Abundance"] = pd.to_numeric(df["Abundance"], errors="coerce")
 df_surv = df[df["Abundance"] > SURVIVAL_THRESHOLD].copy()
 df_surv["log10_Abundance"] = np.log10(df_surv["Abundance"])
 
-# New figures depend only on main.py's coal.csv. Use --analysis-only to skip
+# Analysis figures use main.py's coal.csv and rmax_cue.csv. Use --analysis-only to skip
 # legacy figures that also require dilution/resource-overlap simulation outputs.
 plot_cue_stability_analyses(df)
 if "--analysis-only" in sys.argv:
@@ -316,11 +333,28 @@ plt.show()
 
 from matplotlib.ticker import MaxNLocator
 
-df_comm_agg = (
-    df_surv
-    .groupby(["Seed", "Community", "Competition", "Community_CUE_surv", "Facilitation"], as_index=False)
-    .agg(Species_CUE_Var=("Species_CUE", lambda x: np.nanvar(x, ddof=1)))
-)
+# Each community contributes one point, irrespective of its species count.
+required_competition = {
+    "Heterospecific_Competition_Pressure",
+    "Depletion_Competition_Status",
+}
+missing_competition = required_competition.difference(df.columns)
+if missing_competition:
+    raise ValueError("coal.csv lacks resource-mediated competition columns: " +
+                     ", ".join(sorted(missing_competition)) + ". Run updated main.py first.")
+valid_competition = df[df["Depletion_Competition_Status"].eq("ok")].copy()
+df_comm_agg = valid_competition.drop_duplicates(["Seed", "Community"])
+df_comm_agg = df_comm_agg[
+    np.isfinite(df_comm_agg["Heterospecific_Competition_Pressure"]) &
+    np.isfinite(df_comm_agg["Community_CUE_surv"])
+]
+def save_competition_figure(fig, name):
+    output = CODE_PATH / "figures" / "existing_plots"
+    output.mkdir(parents=True, exist_ok=True)
+    for extension in ("png", "pdf"):
+        fig.savefig(output / f"{name}.{extension}", dpi=220, bbox_inches="tight")
+    print(f"Saved competition figure: {output / name} (.png, .pdf)")
+
 
 fig, axes = plt.subplots(1, 3, figsize=(12, 4.2), sharey=True)
 
@@ -328,7 +362,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     dat = df_comm_agg[df_comm_agg["Community"] == comm]
 
     ax.scatter(
-        dat["Competition"],
+        dat["Heterospecific_Competition_Pressure"],
         dat["Community_CUE_surv"],
         s=44,
         alpha=0.6,
@@ -338,9 +372,8 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
         zorder=3
     )
 
-    ax.set_xlabel("Community uptake similarity")
+    ax.set_xlabel("Community resource-mediated\ncompetition pressure")
     ax.set_title(community_labels[comm], pad=8)
-    ax.set_ylim(0.53, 0.565)
 
     # 每个 x 轴只保留 4 个主刻度
     ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
@@ -354,6 +387,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_competition_figure(fig, "competition_community_cue")
 plt.show()
 
 
@@ -370,7 +404,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     dat = df_surv[df_surv["Community"] == comm]
 
     ax.scatter(
-        dat["Species_Competition2"],
+        dat["Species_Competition_Dot"],
         dat["Species_CUE"],
         s=40,
         alpha=0.55,
@@ -404,6 +438,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_competition_figure(fig, "competition_species_cue")
 plt.show()
 
 
@@ -682,7 +717,6 @@ df_depletion = (
     df.groupby(["Seed", "Community"], as_index=False)
     .agg(
         Community_CUE_surv=("Community_CUE_surv", first_unique),
-        Niche_Overlap=("Competition", first_unique),
         Depletion=("Depletion", first_unique)
     )
 )

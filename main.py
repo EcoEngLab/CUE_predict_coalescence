@@ -1019,15 +1019,9 @@ def main():
     df = pd.DataFrame(all_species_data)
     df.to_csv(os.path.join(code_path, "coal.csv"), index=False)
 
-    community_columns = [
-        "Seed", "Community", "Community_CUE", "Community_CUE_surv",
-        "Heterospecific_Competition_Pressure", "Depletion_Competition_Status",
-        "feasibility", "Feasibility_Status", "Feasibility_Ridge",
-        "Feasibility_Condition", "Leading_Eigenvalue", "Stability_Status", "N_Survivors",
-        "Equilibrium_Residual", "Equilibrium_Reached", "Integration_Success", "End_Time",
-    ]
-    community_metrics = df[community_columns].drop_duplicates(["Seed", "Community"])
-    community_metrics.to_csv(os.path.join(code_path, "coal_community_metrics.csv"), index=False)
+    community_status = df[["Seed", "Community", "Stability_Status"]].drop_duplicates(
+        ["Seed", "Community"]
+    )
     # Always write the file so disabling assays cannot leave stale measurements.
     rmax_data = df.loc[df["Community"] == 1, [
         "Seed", "Community", "Species_ID", "Species_CUE", "Abundance", "rmax", "t_star",
@@ -1096,10 +1090,9 @@ def main():
     print(os.path.join(code_path, "coal_summary.csv"))
     print(os.path.join(code_path, "cue_abundance_theory_params.csv"))
 
-    print(os.path.join(code_path, "coal_community_metrics.csv"))
     print(os.path.join(code_path, "rmax_cue.csv"))
     print("\nStability status counts:")
-    print(community_metrics.groupby(["Community", "Stability_Status"]).size())
+    print(community_status.groupby(["Community", "Stability_Status"]).size())
 
     print("\nSummary results by community:")
     print(summary_df)
