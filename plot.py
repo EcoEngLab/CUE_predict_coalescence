@@ -1,6 +1,3 @@
-# ====================================================================================================
-# ======================================== settings =========================================
-# ====================================================================================================
 
 import warnings
 from pathlib import Path
@@ -106,10 +103,6 @@ def plot_rmax_cue(csv_path=None):
     if measured.empty:
         print("No valid monoculture CUE values; rmax CUE figure skipped.")
         return
-
-    # Match the supplied screenshot: wide panel and outlined blue circles.
-    # Growth CUE = rmax/(rmax+m); intrinsic CUE = theoretical CUE at R0.
-    # Keep the screenshot's reference ranges while plotting current results.
     x_limits = (0.823287127236146, 0.9183617527654756)
     y_limits = (0.36267703816237207, 0.5994246408096401)
     outside = (~measured["growth_CUE"].between(*x_limits) |
@@ -215,11 +208,7 @@ df_rare = df_rare.rename(columns={
 
 
 
-
-# ====================================================================================================
-# ================================ Species CUE vs Abundance + Theory =============================
-# ====================================================================================================
-
+# Species CUE vs Abundance 
 y_min = np.nanmin(df_surv["log10_Abundance"])
 y_max = np.nanmax(df_surv["log10_Abundance"])
 
@@ -318,12 +307,7 @@ save_figure(fig, "cue_abundance_theory")
 plt.show()
 
 
-
-
-# ====================================================================================================
-# ========================= Competition vs Community-level CUE =================================
-# ====================================================================================================
-
+# Competition vs Community-level CUE 
 
 from matplotlib.ticker import MaxNLocator
 
@@ -378,9 +362,7 @@ plt.show()
 
 
 
-# ====================================================================================================
-# =========================== Species competition vs Species CUE ================================
-# ====================================================================================================
+# Species competition vs Species CUE
 
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
@@ -427,13 +409,7 @@ plt.tight_layout()
 save_figure(fig, "competition_species_cue")
 plt.show()
 
-
-
-
-# ====================================================================================================
-# ========================== Facilitation vs Community-level CUE =================================
-# ====================================================================================================
-
+# Facilitation vs Community-level CUE
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 df_comm_fac = (
@@ -487,9 +463,7 @@ plt.show()
 
 
 
-# ====================================================================================================
-# ====================== ΔCUE vs ΔSimilarity with Dominance ====================================
-# ====================================================================================================
+# ΔCUE vs ΔSimilarity with Dominance
 
 df_mut = df_surv.copy()
 df_mut["Global_Species_ID"] = np.where(
@@ -697,10 +671,7 @@ plt.show()
 
 
 
-# ====================================================================================================
-# ============================= Community-level CUE vs Depletion ================================
-# ====================================================================================================
-
+# Community-level CUE vs Depletion
 df_depletion = (
     df.groupby(["Seed", "Community"], as_index=False)
     .agg(
@@ -781,9 +752,7 @@ plt.show()
 
 
 
-# ====================================================================================================
-# ============================== Rare Species Invasion ==========================================
-# ====================================================================================================
+# Rare Species Invasion
 
 df_rare_filt = df_rare[
     (df_rare["Community"] == 3) & (df_rare["Origin"] == "Comm2")

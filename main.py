@@ -1,7 +1,4 @@
 import os
-
-# Parallelize across seeds rather than also spawning BLAS threads in each worker.
-# Set defaults before importing NumPy/SciPy; explicit environment overrides remain valid.
 for _thread_variable in (
     "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"
 ):
@@ -17,7 +14,6 @@ from scipy.optimize import minimize_scalar
 
 
 # Basic simulation of microbial community coalescence
-
 
 # =========================
 # 1. Parameter settings
@@ -379,7 +375,6 @@ def analyze_community(sol, u, l, m, rho, omega):
         intrinsic_growth = np.full(N, np.nan)
         feasibility = {"feasibility": np.nan, "Feasibility_Ridge": np.nan,
                        "Feasibility_Condition": np.nan, "Feasibility_Status": "resource_matrix_singular"}
-    # Evaluate the resource-mediated competition only at a numerical equilibrium.
     depletion_pressure = np.nan
     if not sol.success:
         depletion_status = "solver_failed"
@@ -704,7 +699,7 @@ def estimate_theory_params_mechanistic(df_comm, survival_threshold=1e-5):
 
 
 # =========================
-# 4. Once-per-seed simulation function
+# 4. Simulation function
 # =========================
 def simulate(seed):
     rng = np.random.default_rng(seed)

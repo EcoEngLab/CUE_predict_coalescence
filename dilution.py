@@ -1,13 +1,10 @@
+# this script simulates rare species invasion in microbial communities. 
+
 from multiprocessing import Pool, cpu_count
 import numpy as np
 import pandas as pd
 import os
 from scipy.integrate import solve_ivp
-
-
-# this script simulates rare species invasion in microbial communities. 
-
-
 
 # =========================
 # functions for generating matrices, solving MiCRM, and calculating metrics
