@@ -1,8 +1,9 @@
-# ====================================================================================================
-# ======================================== settings =========================================
-# ====================================================================================================
 
 import warnings
+from pathlib import Path
+
+CODE_PATH = Path(__file__).resolve().parent
+FIGURE_DIR = CODE_PATH / "figures"
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -76,8 +77,109 @@ def first_unique(series):
     vals = pd.Series(series).dropna().unique()
     return vals[0] if len(vals) > 0 else np.nan
 
-df = pd.read_csv("coal.csv")
-df = df.rename(columns={"Species_Competition_Dot": "Species_Competition2"})
+def save_figure(fig, name):
+    """Save a figure as a PDF directly under figures/."""
+    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = FIGURE_DIR / f"{name}.pdf"
+    fig.savefig(output_path, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_rmax_cue(csv_path=None):
+    """Screenshot style: measurable growth CUE on x, theoretical CUE on y."""
+    csv_path = CODE_PATH / "rmax_cue.csv" if csv_path is None else Path(csv_path)
+    if not csv_path.exists():
+        print(f"Skipping rmax CUE figure: {csv_path} is missing. Run main.py first.")
+        return
+    measured = pd.read_csv(csv_path)
+    required = {"intrinsic_CUE", "growth_CUE"}
+    if not required.issubset(measured.columns):
+        raise ValueError("rmax_cue.csv requires intrinsic_CUE and growth_CUE columns")
+    valid = np.isfinite(measured["intrinsic_CUE"]) & np.isfinite(measured["growth_CUE"])
+    if "Monoculture_Success" in measured:
+        valid &= measured["Monoculture_Success"].astype(str).str.lower().eq("true")
+    measured = measured.loc[valid]
+    if measured.empty:
+        print("No valid monoculture CUE values; rmax CUE figure skipped.")
+        return
+    x_limits = (0.823287127236146, 0.9183617527654756)
+    y_limits = (0.36267703816237207, 0.5994246408096401)
+    outside = (~measured["growth_CUE"].between(*x_limits) |
+               ~measured["intrinsic_CUE"].between(*y_limits)).sum()
+    if outside:
+        print(f"rmax CUE: {outside} points fall outside the fixed reference axes.")
+    from matplotlib.ticker import MultipleLocator
+    with plt.rc_context({"font.size": 10, "axes.labelsize": 10,
+                         "axes.titlesize": 10,
+                         "xtick.labelsize": 10, "ytick.labelsize": 10}):
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.scatter(measured["growth_CUE"], measured["intrinsic_CUE"],
+                   s=30, alpha=0.5, facecolors="#9FB7CC", edgecolors="black",
+                   linewidths=0.4, zorder=3)
+        ax.set_xlim(*x_limits)
+        ax.set_ylim(*y_limits)
+        ax.xaxis.set_major_locator(MultipleLocator(0.01))
+        ax.yaxis.set_major_locator(MultipleLocator(0.05))
+        ax.set_xlabel("Measurable CUE", labelpad=6)
+        ax.set_ylabel("Theoretical CUE", labelpad=8)
+        ax.set_title("", pad=10)
+        style_ax(ax)
+        fig.tight_layout()
+        save_figure(fig, "rmax_cue")
+        plt.close(fig)
+    print(f"rmax CUE figure includes n={len(measured)} monocultures.")
+
+
+def plot_cue_stability_analyses(data):
+    """Use one row per seed/community for community metrics; retain negative proxies."""
+    plot_rmax_cue()
+    required = {"feasibility", "Leading_Eigenvalue", "Equilibrium_Reached",
+                "Feasibility_Status", "Integration_Success", "Stability_Status"}
+    missing = required.difference(data.columns)
+    if missing:
+        print("Skipping new analyses: coal.csv lacks " + ", ".join(sorted(missing)) +
+              ". Run the updated main.py first.")
+        return
+    valid = data[data["Integration_Success"].astype(str).str.lower().eq("true")].copy()
+    communities = valid.drop_duplicates(["Seed", "Community"])
+
+    equilibrated = communities[communities["Equilibrium_Reached"].astype(str).str.lower().eq("true")]
+    print(f"Stability figures: {len(equilibrated)}/{len(communities)} community endpoints "
+          "meet the derivative tolerance. Status counts: " +
+          str(communities["Stability_Status"].value_counts().to_dict()))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    order = ["1", "2", "3"]
+    labels = ["Community 1", "Community 2", "Coalesced"]
+    for ax, column, ylabel, title in (
+        (axes[0], "feasibility", "Log10 feasibility proxy per dimension", "Survivor interaction matrix"),
+        (axes[1], "Leading_Eigenvalue", "Largest real part of eigenvalues", "Full consumer–resource Jacobian"),
+    ):
+        subset = equilibrated[np.isfinite(equilibrated[column])]
+        if column == "feasibility":
+            subset = subset[subset["Feasibility_Status"] == "ok"]
+        if len(subset):
+            sns.boxplot(data=subset, x="Community", y=column, order=order,
+                        hue="Community", hue_order=order, palette=pal_rgb, legend=False,
+                        ax=ax, width=0.5, fliersize=0, linewidth=0.8)
+            # Deterministic offsets avoid changing the simulation or global RNG state.
+            for index, community in enumerate(order):
+                values = subset.loc[subset["Community"] == community, column].to_numpy()
+                offsets = np.linspace(-0.08, 0.08, len(values)) if len(values) > 1 else np.zeros(len(values))
+                ax.scatter(index + offsets, values, color="#3F4A50", s=12, alpha=0.6, zorder=3)
+        else:
+            ax.text(0.5, 0.5, "No valid equilibrated communities", ha="center", transform=ax.transAxes)
+        ax.set_xticks(range(3), labels)
+        ax.set(xlabel="", ylabel=ylabel, title=title)
+        style_ax(ax)
+        if column == "Leading_Eigenvalue":
+            ax.axhline(0, color="#A84A42", linestyle="--", linewidth=0.8)
+    fig.suptitle("Feasibility proxy and local stability at numerical equilibria", fontsize=15)
+    save_figure(fig, "feasibility_and_leading_eigenvalue")
+    plt.close(fig)
+
+
+df = pd.read_csv(CODE_PATH / "coal.csv")
 df["Community"] = df["Community"].astype(str)
 df["Species_ID"] = pd.to_numeric(df["Species_ID"], errors="coerce")
 df["Species_CUE"] = pd.to_numeric(df["Species_CUE"], errors="coerce")
@@ -86,17 +188,19 @@ df["Abundance"] = pd.to_numeric(df["Abundance"], errors="coerce")
 df_surv = df[df["Abundance"] > SURVIVAL_THRESHOLD].copy()
 df_surv["log10_Abundance"] = np.log10(df_surv["Abundance"])
 
-params_df = pd.read_csv("cue_abundance_theory_params.csv")
+plot_cue_stability_analyses(df)
+
+params_df = pd.read_csv(CODE_PATH / "cue_abundance_theory_params.csv")
 params_df["Community"] = params_df["Community"].astype(str)
 
-df_resource = pd.read_csv("coal_resource.csv")
+df_resource = pd.read_csv(CODE_PATH / "coal_resource.csv")
 df_resource = df_resource.rename(columns={
     "Similarity_3vs1": "Sim_3vs1",
     "Similarity_3vs2": "Sim_3vs2"
 })
 df_resource["Overlap"] = df_resource["Overlap"].astype(str)
 
-df_rare = pd.read_csv("rare.csv")
+df_rare = pd.read_csv(CODE_PATH / "rare.csv")
 df_rare = df_rare.rename(columns={
     "Abundance": "C_final",
     "Species_CUE": "CUE"
@@ -104,11 +208,7 @@ df_rare = df_rare.rename(columns={
 
 
 
-
-# ====================================================================================================
-# ================================ Species CUE vs Abundance + Theory =============================
-# ====================================================================================================
-
+# Species CUE vs Abundance 
 y_min = np.nanmin(df_surv["log10_Abundance"])
 y_max = np.nanmax(df_surv["log10_Abundance"])
 
@@ -203,31 +303,36 @@ for i, comm in enumerate(["1", "2", "3"]):
         ax_theory.set_ylim(SURVIVAL_THRESHOLD, 1.0)
 
 plt.tight_layout()
+save_figure(fig, "cue_abundance_theory")
 plt.show()
 
 
-
-
-# ====================================================================================================
-# ========================= Competition vs Community-level CUE =================================
-# ====================================================================================================
-
+# Competition vs Community-level CUE 
 
 from matplotlib.ticker import MaxNLocator
 
-df_comm_agg = (
-    df_surv
-    .groupby(["Seed", "Community", "Competition", "Community_CUE_surv", "Facilitation"], as_index=False)
-    .agg(Species_CUE_Var=("Species_CUE", lambda x: np.nanvar(x, ddof=1)))
-)
-
+# Each community contributes one point, irrespective of its species count.
+required_competition = {
+    "Heterospecific_Competition_Pressure",
+    "Depletion_Competition_Status",
+}
+missing_competition = required_competition.difference(df.columns)
+if missing_competition:
+    raise ValueError("coal.csv lacks resource-mediated competition columns: " +
+                     ", ".join(sorted(missing_competition)) + ". Run updated main.py first.")
+valid_competition = df[df["Depletion_Competition_Status"].eq("ok")].copy()
+df_comm_agg = valid_competition.drop_duplicates(["Seed", "Community"])
+df_comm_agg = df_comm_agg[
+    np.isfinite(df_comm_agg["Heterospecific_Competition_Pressure"]) &
+    np.isfinite(df_comm_agg["Community_CUE_surv"])
+]
 fig, axes = plt.subplots(1, 3, figsize=(12, 4.2), sharey=True)
 
 for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     dat = df_comm_agg[df_comm_agg["Community"] == comm]
 
     ax.scatter(
-        dat["Competition"],
+        dat["Heterospecific_Competition_Pressure"],
         dat["Community_CUE_surv"],
         s=44,
         alpha=0.6,
@@ -237,9 +342,8 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
         zorder=3
     )
 
-    ax.set_xlabel("Community uptake similarity")
+    ax.set_xlabel("Community resource-mediated\ncompetition pressure")
     ax.set_title(community_labels[comm], pad=8)
-    ax.set_ylim(0.53, 0.565)
 
     # 每个 x 轴只保留 4 个主刻度
     ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
@@ -253,13 +357,12 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "competition_community_cue")
 plt.show()
 
 
 
-# ====================================================================================================
-# =========================== Species competition vs Species CUE ================================
-# ====================================================================================================
+# Species competition vs Species CUE
 
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
@@ -269,7 +372,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     dat = df_surv[df_surv["Community"] == comm]
 
     ax.scatter(
-        dat["Species_Competition2"],
+        dat["Species_Competition_Dot"],
         dat["Species_CUE"],
         s=40,
         alpha=0.55,
@@ -303,15 +406,10 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "competition_species_cue")
 plt.show()
 
-
-
-
-# ====================================================================================================
-# ========================== Facilitation vs Community-level CUE =================================
-# ====================================================================================================
-
+# Facilitation vs Community-level CUE
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 df_comm_fac = (
@@ -359,14 +457,13 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "facilitation_community_cue")
 plt.show()
 
 
 
 
-# ====================================================================================================
-# ====================== ΔCUE vs ΔSimilarity with Dominance ====================================
-# ====================================================================================================
+# ΔCUE vs ΔSimilarity with Dominance
 
 df_mut = df_surv.copy()
 df_mut["Global_Species_ID"] = np.where(
@@ -568,20 +665,17 @@ ax2.set_xticklabels(
 style_ax(ax2, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "cue_similarity_resource_overlap")
 plt.show()
 
 
 
 
-# ====================================================================================================
-# ============================= Community-level CUE vs Depletion ================================
-# ====================================================================================================
-
+# Community-level CUE vs Depletion
 df_depletion = (
     df.groupby(["Seed", "Community"], as_index=False)
     .agg(
         Community_CUE_surv=("Community_CUE_surv", first_unique),
-        Niche_Overlap=("Competition", first_unique),
         Depletion=("Depletion", first_unique)
     )
 )
@@ -652,17 +746,21 @@ ax2.set_ylabel("Community-level CUE")
 style_ax(ax2, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "community_cue_depletion")
 plt.show()
 
 
 
 
-# ====================================================================================================
-# ============================== Rare Species Invasion ==========================================
-# ====================================================================================================
+# Rare Species Invasion
 
-df_rare["survival"] = np.where(df_rare["C_final"] > SURVIVAL_THRESHOLD, "Survived", "Extinct")
-df_rare_filt = df_rare[df_rare["DilutionRate"].isin([0.01, 0.1])].copy()
+df_rare_filt = df_rare[
+    (df_rare["Community"] == 3) & (df_rare["Origin"] == "Comm2")
+].copy()
+df_rare_filt = df_rare_filt[df_rare_filt["DilutionRate"].isin([0.01, 0.1])].copy()
+df_rare_filt["survival"] = np.where(
+    df_rare_filt["C_final"] > SURVIVAL_THRESHOLD, "Survived", "Extinct"
+)
 
 n_bins = 20
 df_rare_filt["CUE_bin"] = pd.cut(df_rare_filt["CUE"], bins=n_bins)
@@ -828,4 +926,5 @@ ax_top_left.plot((-d, +d), (-d, +d), **kwargs_top)
 ax_bot_left.plot((-d, +d), (1 - d, 1 + d), **kwargs_bot)
 
 plt.tight_layout()
+save_figure(fig, "rare_species_invasion")
 plt.show()

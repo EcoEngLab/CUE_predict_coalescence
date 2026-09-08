@@ -90,31 +90,53 @@ def safe_weighted_average(values, weights):
     return np.sum(values * weights) / total_weight
 
 
-def compute_species_CUE(u, R_ref, lam, m):
-    """Compute species-level CUE."""
-    total_uptake = np.sum(u * R_ref, axis=1)
-    net_uptake = np.sum(u * R_ref * (1 - lam), axis=1) - m
-    species_CUE = net_uptake / (total_uptake + 1e-12)
-    return species_CUE
+def compute_eta_from_l(l):
+    return 1.0 - np.sum(l, axis=2)
+
+
+def ensure_m_vector(m, N):
+    if np.ndim(m) == 0:
+        return np.full(N, float(m))
+    m_vec = np.asarray(m, dtype=float)
+    if m_vec.shape[0] != N:
+        raise ValueError("Length of m does not match N")
+    return m_vec
+
+
+def compute_species_CUE(u, R_ref, l, m):
+    """Compute reference-environment CUE using retention from the leakage tensor."""
+    N = u.shape[0]
+    eta = compute_eta_from_l(l)
+    m_vec = ensure_m_vector(m, N)
+    total_uptake = np.sum(u * R_ref[None, :], axis=1)
+    growth_flux = np.sum(u * eta * R_ref[None, :], axis=1)
+    return (growth_flux - m_vec) / (total_uptake + 1e-12)
 
 
 def solve_micrm(
     N, M, u, l, m, lambda_alpha, rho, omega, C0, R0,
-    t_span, t_eval=None, tol=1e-5, method="BDF"
+    t_span, t_eval=None, tol=1e-5, method='BDF'
 ):
-    """Solve the MiCRM model using solve_ivp with an event to detect equilibrium."""
-    def dCdt_Rdt(t, y):
-        C = y[:N]
-        R = y[N:]
+    # Retention is derived from l; lambda_alpha remains for call compatibility.
+    m_vec = ensure_m_vector(m, N)
+    rho = np.asarray(rho, dtype=float)
+    omega = np.asarray(omega, dtype=float)
+    C0 = np.asarray(C0, dtype=float)
+    R0 = np.asarray(R0, dtype=float)
+    eta = compute_eta_from_l(l)
 
-        uptake = u * (R * (1 - lambda_alpha))
-        dCdt = C * (np.sum(uptake, axis=1) - m)
+    def dCdt_Rdt(t, y):
+        C = np.clip(y[:N], 0.0, None)
+        R = np.clip(y[N:], 0.0, None)
+
+        growth_flux = u * eta * R[None, :]
+        dCdt = C * (np.sum(growth_flux, axis=1) - m_vec)
 
         dRdt = rho - omega * R
-        consumption = np.sum(C[:, None] * u * R, axis=0)
+        consumption = np.sum(C[:, None] * u * R[None, :], axis=0)
         dRdt -= consumption
 
-        leakage = np.einsum("i,j,ij,ijk->k", C, R, u, l)
+        leakage = np.einsum('i,b,ib,iba->a', C, R, u, l, optimize='optimal')
         dRdt += leakage
 
         return np.concatenate([dCdt, dRdt])
@@ -126,19 +148,19 @@ def solve_micrm(
     equilibrium_event.terminal = True
     equilibrium_event.direction = -1
 
-    if t_eval is None:
-        t_eval = np.linspace(t_span[0], t_span[1], 100)
-
     Y0 = np.concatenate([C0, R0])
 
-    sol = solve_ivp(
-        dCdt_Rdt,
-        t_span,
-        Y0,
-        t_eval=t_eval,
+    solve_kwargs = dict(
+        fun=dCdt_Rdt,
+        t_span=t_span,
+        y0=Y0,
         method=method,
         events=equilibrium_event
     )
+    if t_eval is not None:
+        solve_kwargs["t_eval"] = t_eval
+
+    sol = solve_ivp(**solve_kwargs)
     return sol
 
 
@@ -287,14 +309,14 @@ def simulate_overlap(args):
     )
 
     # Extract community metrics
-    C_final1 = sol1.y[:N1, -1]
-    C_final2 = sol2.y[:N2, -1]
-    C_final3 = sol3.y[:N3, -1]
+    C_final1 = np.maximum(sol1.y[:N1, -1], 0.0)
+    C_final2 = np.maximum(sol2.y[:N2, -1], 0.0)
+    C_final3 = np.maximum(sol3.y[:N3, -1], 0.0)
 
     # CUE calculations
-    species_CUE1 = compute_species_CUE(u1, R0_1, LEAKAGE_RATE, MAINTENANCE_COST)
-    species_CUE2 = compute_species_CUE(u2, R0_2, LEAKAGE_RATE, MAINTENANCE_COST)
-    species_CUE3 = compute_species_CUE(u3, R0_3, LEAKAGE_RATE, MAINTENANCE_COST)
+    species_CUE1 = compute_species_CUE(u1, R0_1, l1, MAINTENANCE_COST)
+    species_CUE2 = compute_species_CUE(u2, R0_2, l2, MAINTENANCE_COST)
+    species_CUE3 = compute_species_CUE(u3, R0_3, l3, MAINTENANCE_COST)
 
     # Survivors
     survivors1 = np.where(C_final1 > SURVIVAL_THRESHOLD)[0]
@@ -321,9 +343,9 @@ def simulate_overlap(args):
     facilitation3 = np.mean(np.sum(L_eff3, axis=1))
 
     # Resource depletion
-    depletion1 = np.sum(sol1.y[N1:, -1])
-    depletion2 = np.sum(sol2.y[N2:, -1])
-    depletion3 = np.sum(sol3.y[N3:, -1])
+    depletion1 = np.sum(np.maximum(sol1.y[N1:, -1], 0.0))
+    depletion2 = np.sum(np.maximum(sol2.y[N2:, -1], 0.0))
+    depletion3 = np.sum(np.maximum(sol3.y[N3:, -1], 0.0))
 
     # Total abundance
     total_abundance_1 = np.sum(C_final1)

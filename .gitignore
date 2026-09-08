@@ -1,2 +1,4 @@
 *.csv
 *.pdf
+figures/
+.DS_Store
