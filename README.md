@@ -39,9 +39,9 @@ Species CUE is evaluated in a reference resource environment as net growth flux 
 | `main.py` | Baseline community assembly and coalescence; CUE–abundance theory; monoculture CUE assays; feasibility and Jacobian stability metrics | `coal.csv`, `coal_summary.csv`, `cue_abundance_theory_params.csv`, `rmax_cue.csv` |
 | `dilution.py` | Rare-species invasion with the second community introduced at multiple dilution rates | `rare.csv` |
 | `resource_overlap.py` | Coalescence at 25%, 50%, and 75% resource overlap | `coal_resource.csv` |
-| `plot.py` | Analysis and figure generation from the simulation CSV files | PNG/PDF files under `figures/`, plus interactive figures |
+| `plot.py` | Analysis and figure generation from the simulation CSV files | PDF files under `figures/`, plus interactive figures |
 
-Generated data and figures are written beside the scripts and are not required to be present before the simulations are run.
+Generated CSV data are written beside the scripts, while generated figures are written to `figures/`. They are not required to be present before the simulations are run.
 
 ## Requirements
 
@@ -86,7 +86,8 @@ python plot.py
 
 `dilution.py` defaults to 100 seeds at dilution rates 0.01 and 0.1. `resource_overlap.py` defaults to 50 seeds at overlap ratios 0.25, 0.5, and 0.75. Both use all CPU cores reported by Python. Adjust their parameter blocks before running on a shared machine or when testing locally.
 
-Some plots are saved as both PNG and PDF under `figures/`.
+All nine figures are saved as PDF files directly under `figures/` (with no subdirectories) and are also displayed through Matplotlib where applicable. On a headless system, set an appropriate Matplotlib backend.
+
 ## Main outputs
 
 ### `coal.csv`

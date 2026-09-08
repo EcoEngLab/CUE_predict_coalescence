@@ -6,6 +6,7 @@ import warnings
 from pathlib import Path
 
 CODE_PATH = Path(__file__).resolve().parent
+FIGURE_DIR = CODE_PATH / "figures"
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -79,14 +80,13 @@ def first_unique(series):
     vals = pd.Series(series).dropna().unique()
     return vals[0] if len(vals) > 0 else np.nan
 
-def save_analysis_figure(fig, name):
-    output = CODE_PATH / "figures" / "cue_stability"
-    output.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    for extension in ("png", "pdf"):
-        fig.savefig(output / f"{name}.{extension}", dpi=220, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved {output / name} (.png, .pdf)")
+def save_figure(fig, name):
+    """Save a figure as a PDF directly under figures/."""
+    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = FIGURE_DIR / f"{name}.pdf"
+    fig.savefig(output_path, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    return output_path
 
 
 def plot_rmax_cue(csv_path=None):
@@ -133,12 +133,9 @@ def plot_rmax_cue(csv_path=None):
         ax.set_title("", pad=10)
         style_ax(ax)
         fig.tight_layout()
-        output = CODE_PATH / "figures" / "monoculture_figures"
-        output.mkdir(parents=True, exist_ok=True)
-        for extension in ("png", "pdf"):
-            fig.savefig(output / f"rmax_cue.{extension}", dpi=220, bbox_inches="tight")
+        save_figure(fig, "rmax_cue")
         plt.close(fig)
-    print(f"Saved {output / 'rmax_cue'} (.png, .pdf); n={len(measured)} monocultures.")
+    print(f"rmax CUE figure includes n={len(measured)} monocultures.")
 
 
 def plot_cue_stability_analyses(data):
@@ -185,7 +182,8 @@ def plot_cue_stability_analyses(data):
         if column == "Leading_Eigenvalue":
             ax.axhline(0, color="#A84A42", linestyle="--", linewidth=0.8)
     fig.suptitle("Feasibility proxy and local stability at numerical equilibria", fontsize=15)
-    save_analysis_figure(fig, "feasibility_and_leading_eigenvalue")
+    save_figure(fig, "feasibility_and_leading_eigenvalue")
+    plt.close(fig)
 
 
 df = pd.read_csv(CODE_PATH / "coal.csv")
@@ -316,6 +314,7 @@ for i, comm in enumerate(["1", "2", "3"]):
         ax_theory.set_ylim(SURVIVAL_THRESHOLD, 1.0)
 
 plt.tight_layout()
+save_figure(fig, "cue_abundance_theory")
 plt.show()
 
 
@@ -343,14 +342,6 @@ df_comm_agg = df_comm_agg[
     np.isfinite(df_comm_agg["Heterospecific_Competition_Pressure"]) &
     np.isfinite(df_comm_agg["Community_CUE_surv"])
 ]
-def save_competition_figure(fig, name):
-    output = CODE_PATH / "figures" / "existing_plots"
-    output.mkdir(parents=True, exist_ok=True)
-    for extension in ("png", "pdf"):
-        fig.savefig(output / f"{name}.{extension}", dpi=220, bbox_inches="tight")
-    print(f"Saved competition figure: {output / name} (.png, .pdf)")
-
-
 fig, axes = plt.subplots(1, 3, figsize=(12, 4.2), sharey=True)
 
 for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
@@ -382,7 +373,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
-save_competition_figure(fig, "competition_community_cue")
+save_figure(fig, "competition_community_cue")
 plt.show()
 
 
@@ -433,7 +424,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
-save_competition_figure(fig, "competition_species_cue")
+save_figure(fig, "competition_species_cue")
 plt.show()
 
 
@@ -490,6 +481,7 @@ for i, (ax, comm) in enumerate(zip(axes, ["1", "2", "3"])):
     style_ax(ax, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "facilitation_community_cue")
 plt.show()
 
 
@@ -699,6 +691,7 @@ ax2.set_xticklabels(
 style_ax(ax2, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "cue_similarity_resource_overlap")
 plt.show()
 
 
@@ -782,6 +775,7 @@ ax2.set_ylabel("Community-level CUE")
 style_ax(ax2, grid=False)
 
 plt.tight_layout()
+save_figure(fig, "community_cue_depletion")
 plt.show()
 
 
@@ -963,4 +957,5 @@ ax_top_left.plot((-d, +d), (-d, +d), **kwargs_top)
 ax_bot_left.plot((-d, +d), (1 - d, 1 + d), **kwargs_bot)
 
 plt.tight_layout()
+save_figure(fig, "rare_species_invasion")
 plt.show()
