@@ -71,17 +71,7 @@ Run commands from the repository root.
 python main.py
 ```
 
-The default run evaluates 50 random realizations with up to four worker processes. It also performs one monoculture assay for every Community 1 species in every realization. This is computationally intensive; progress is printed as seeds complete and every 30 seconds while waiting.
-
-For a quick test, edit the parameter block near the top of `main.py`, for example:
-
-```python
-N_SIMULATIONS = 2
-N_WORKERS = 2
-COMPUTE_MEASURABLE_CUE = False
-```
-
-Setting `COMPUTE_MEASURABLE_CUE = False` skips the additional monoculture ODE solves. `rmax_cue.csv` is still created, but its assay-derived columns will be empty.
+The default run evaluates 50 random realizations with up to four worker processes. It also performs one monoculture assay for every Community 1 species in every realization.
 
 ### Full experiment and plotting workflow
 
@@ -96,8 +86,7 @@ python plot.py
 
 `dilution.py` defaults to 100 seeds at dilution rates 0.01 and 0.1. `resource_overlap.py` defaults to 50 seeds at overlap ratios 0.25, 0.5, and 0.75. Both use all CPU cores reported by Python. Adjust their parameter blocks before running on a shared machine or when testing locally.
 
-Some plots are saved as both PNG and PDF under `figures/`, including the `cue_stability/`, `monoculture_figures/`, and `existing_plots/` subdirectories; others are displayed through Matplotlib. On a headless system, set an appropriate Matplotlib backend.
-
+Some plots are saved as both PNG and PDF under `figures/`.
 ## Main outputs
 
 ### `coal.csv`
@@ -128,28 +117,6 @@ Community 1 monoculture assays comparing theoretical/intrinsic CUE with growth-d
 
 Outputs for the dilution and resource-overlap experiments used by the full plotting workflow.
 
-## Configuration and reproducibility
-
-Simulation settings are constants near the top of each script. The most useful parameters to change are:
-
-- `BASE_SEED` and `N_SIMULATIONS` for reproducibility and replicate count;
-- `N_POOL`, `M_POOL`, `N1`, `N2`, `M1`, and `M2` for pool and community sizes;
-- `LEAKAGE_RATE`, `MAINTENANCE_COST`, `RHO_VALUE`, and `OMEGA_VALUE` for model physiology and resource dynamics;
-- `T_SPAN` and `SURVIVAL_THRESHOLD` for integration and survival criteria;
-- `DILUTION_RATES` in `dilution.py`;
-- `OVERLAP_RATIOS` in `resource_overlap.py`.
-
-Random numbers are generated with NumPy’s `default_rng` from a fixed base seed. The baseline workflow preserves seed order in its CSV output even though simulations finish in parallel. Existing output files with the same names are overwritten when a workflow completes.
-
-The feasibility value reported by `main.py` is an SVD log-volume proxy per survivor dimension, not a probability. Stability is assessed from the largest real part of the eigenvalues of the full consumer–resource Jacobian at endpoints that meet the numerical equilibrium tolerance.
-
-## Citation
-
-If you use this code, please cite the associated paper:
-
-> *Carbon-Use Efficiency Predicts the Outcome of Microbial Community Coalescence.*
-
-Add the authors, journal, year, and DOI here when the final bibliographic record is available.
 
 ## License
 
