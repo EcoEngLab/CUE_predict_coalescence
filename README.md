@@ -21,10 +21,16 @@ $$
 \frac{dR_a}{dt}
 = \rho_a-\omega_aR_a
 -\sum_i C_i u_{ia}R_a
-+\sum_{i,b}C_iR_bu_{ib}l_{iba},
++\sum_{i,\beta}C_iR_\beta u_{i\beta}l_{i\beta a},
 $$
 
-where \(u\) is the uptake matrix, \(l\) is the leakage tensor, \(m\) is the maintenance cost, and \(\eta_{ia}=1-\sum_b l_{iab}\) is retained carbon. Species CUE is evaluated in a reference resource environment as net growth flux divided by total uptake flux. Community CUE is the abundance-weighted mean of its species’ CUE values.
+where \(u\) is the uptake matrix, \(l\) is the leakage tensor, and \(m\) is the maintenance cost. Retained carbon is
+
+$$
+\eta_{ia}=1-\sum_{\beta}l_{ia\beta}.
+$$
+
+Species CUE is evaluated in a reference resource environment as net growth flux divided by total uptake flux. Community CUE is the abundance-weighted mean of its species’ CUE values.
 
 ## Repository contents
 
