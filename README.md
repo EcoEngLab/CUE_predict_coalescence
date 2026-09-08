@@ -77,22 +77,6 @@ COMPUTE_MEASURABLE_CUE = False
 
 Setting `COMPUTE_MEASURABLE_CUE = False` skips the additional monoculture ODE solves. `rmax_cue.csv` is still created, but its assay-derived columns will be empty.
 
-### Analysis-only figures
-
-After running `main.py`, generate the CUE, feasibility, stability, and monoculture analyses without requiring the auxiliary experiments:
-
-```bash
-python plot.py --analysis-only
-```
-
-These figures are saved beneath:
-
-```text
-figures/
-├── cue_stability/
-└── monoculture_figures/
-```
-
 ### Full experiment and plotting workflow
 
 To generate every dataset expected by `plot.py`:
@@ -106,7 +90,7 @@ python plot.py
 
 `dilution.py` defaults to 100 seeds at dilution rates 0.01 and 0.1. `resource_overlap.py` defaults to 50 seeds at overlap ratios 0.25, 0.5, and 0.75. Both use all CPU cores reported by Python. Adjust their parameter blocks before running on a shared machine or when testing locally.
 
-Some plots are saved as both PNG and PDF under `figures/`; others are displayed through Matplotlib. On a headless system, set an appropriate Matplotlib backend or run the analysis-only workflow.
+Some plots are saved as both PNG and PDF under `figures/`, including the `cue_stability/`, `monoculture_figures/`, and `existing_plots/` subdirectories; others are displayed through Matplotlib. On a headless system, set an appropriate Matplotlib backend.
 
 ## Main outputs
 

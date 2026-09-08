@@ -3,7 +3,6 @@
 # ====================================================================================================
 
 import warnings
-import sys
 from pathlib import Path
 
 CODE_PATH = Path(__file__).resolve().parent
@@ -198,11 +197,7 @@ df["Abundance"] = pd.to_numeric(df["Abundance"], errors="coerce")
 df_surv = df[df["Abundance"] > SURVIVAL_THRESHOLD].copy()
 df_surv["log10_Abundance"] = np.log10(df_surv["Abundance"])
 
-# Analysis figures use main.py's coal.csv and rmax_cue.csv. Use --analysis-only to skip
-# legacy figures that also require dilution/resource-overlap simulation outputs.
 plot_cue_stability_analyses(df)
-if "--analysis-only" in sys.argv:
-    raise SystemExit(0)
 
 params_df = pd.read_csv(CODE_PATH / "cue_abundance_theory_params.csv")
 params_df["Community"] = params_df["Community"].astype(str)
